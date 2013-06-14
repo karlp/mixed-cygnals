@@ -1,0 +1,18 @@
+Allows setting the serial number of CP2102 USB-TTL bridge dongles.
+From the factory, these default to a serial of 0001.  SiLabs provides a
+totally usable gui app for setting this serial, and more fields, but
+I used this as a basic trainer for working out to read the usb traces from
+wireshark to work out the protocol myself.
+
+SiLabs software is at http://www.silabs.com/Support%20Documents/Software/AN721SW.zip
+
+Usage:
+
+$ sudo python write.py "new serial"
+INFO:MixedCygnals:Serial successfully changed to new serial
+$ sudo lsusb -v -d :ea60 | grep -i serial
+  iSerial                 3 new serial
+$ sudo python write.py 9876cafe
+INFO:MixedCygnals:Serial successfully changed to 9876cafe
+$ sudo lsusb -v -d :ea60 | grep -i serial
+  iSerial                 3 9876cafe
