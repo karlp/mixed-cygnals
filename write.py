@@ -29,8 +29,12 @@ uu = struct.pack(sformat, len(data)+2, 3, data)
 log.debug("Attempting to send %s", [x for x in uu]) 
 
 # This came from the wireshark packet trace, frames 13-16
-assert dev.ctrl_transfer(0x40, 0xff, 0x3704, 0, uu) == len(uu)
-ret = dev.ctrl_transfer(0xc0, 0xff, 0x370b, 0, 1)
+# needs to be 1 for second port on multi interface devices...
+# http://community.silabs.com/t5/Interface-Products/CP2105-driver-questions/td-p/89191
+# and https://lkml.org/lkml/2012/2/23/415
+bInterfaceNumber = 0
+assert dev.ctrl_transfer(0x40, 0xff, 0x3704, bInterfaceNumber, uu) == len(uu)
+ret = dev.ctrl_transfer(0xc0, 0xff, 0x370b, bInterfaceNumber, 1)
 sret = ''.join([chr(x) for x in ret])
 if sret == '\x02':
 	log.info("Serial successfully changed to %s", serial)
