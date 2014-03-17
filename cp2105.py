@@ -1,10 +1,9 @@
 #!/usr/bin/python
-# Attempt to reset the serial number of a CP2102 device.
-# Made by reverse engineering the usb transfers.
-# SiLabs actually provides a quite usable linux/windows/mac gui tool that
-# does this, you don't need to use this at all, but it's an example of how to
-# do this from a usb packet trace.  (I plan on doing some other stuff later)
-# TODO - make it a nice class thing, with more usb decoding done.
+# 
+# Basic hacking on reading/setting cp2105/cp210x settings
+# via pyusb.  Information from silabs drivers, customization utilities
+# and originally some wireshark usb reverse engineering
+# Very rough, and be careful, cp2105 is OTP! not eeprom!
 
 import sys
 import binascii
@@ -46,6 +45,12 @@ class CP2105(CP210x):
         data = self.dev.ctrl_transfer(REQTYPE_DEVICE_TO_HOST, 0xff, 0x3711, 0, 2)
         log.info("Device mode ECI = %#x, SCI =%#x", data[0], data[1])
 
+    def set_device_mode(self, eci, sci):
+        """Pretty sure this is an OTP write to change gpio/modem modes"""
+        x = struct.pack("<BBBB", eci, sci, 0, 0)
+        n = self.dev.ctrl_transfer(REQTYPE_HOST_TO_DEVICE, 0xff, 0x3711, 0, x)
+        log.debug("Wrote %d bytes to set device_mode", n)
+
     def get_dual_port_config(self):
         data = self.dev.ctrl_transfer(REQTYPE_DEVICE_TO_HOST, 0xff, 0x370c, 0, 15)
         ss = ''.join(["%#x " % x for x in data])
@@ -53,33 +58,34 @@ class CP2105(CP210x):
         
         DualPortConfig = namedtuple("DualPortConfig", "mode reset_latch suspend_latch sci eci device")
         dpc = DualPortConfig._make(struct.unpack(">HxxHxxxxHBBB", data))
-        print(dpc)
         log.info("dpc = %r", dpc)
         return dpc
+
+    def set_dual_port_config(self, mode, reset_latch, suspend_latch, sci, eci, device):
+        """
+        Fully expect this to be an OTP write!
+        """
+        # I know everything else is little endian, but this is what the silabs code does...
+        x = struct.pack(">HHHHHHBBB", mode, 0, reset_latch, mode, 0, suspend_latch, sci, eci, device)
+        n = self.dev.ctrl_transfer(REQTYPE_HOST_TO_DEVICE, 0xff, 0x370c, 0, x)
+        log.info("wrote %d bytes %s to reconfigure dual port", n, x)
+        
 
     def get_pins(self, port=0):
         data = self.dev.ctrl_transfer(REQTYPE_INTERFACE_TO_HOST, 0xff, 0x00c2, port, 1)
         log.debug("get_pins(%d) were %s", port, data)
         return data[0]
 
-    # No clue what's going on here...
-    def set_pins(self, port, pins):
-        x = struct.pack("<H", pins & 0xff)
-        log.debug("attempting to send %r", x)
+    def set_pins(self, port, pins, mask=0xff):
+        """
+        having a separate mask parameter means you don't have to read first
+        """
+        x = struct.pack("<H", pins << 8 | mask)
         data = self.dev.ctrl_transfer(REQTYPE_HOST_TO_INTERFACE, 0xff, 0x37e1, port, x)
-        log.debug("set pins(%d) write %d bytes", port, data)
 
     def set_pins_raw(self, port, pins):
         x = struct.pack("<H", pins)
-        log.debug("attempting to send %r", x)
         data = self.dev.ctrl_transfer(REQTYPE_HOST_TO_INTERFACE, 0xff, 0x37e1, port, x)
-        log.debug("set pins(%d) write %d bytes", port, data)
-
-    def clear_pins(self, port, pins):
-        x = struct.pack("<H", ((pins << 8) | 0x00ff))
-        log.debug("attempting to send %r", x)
-        data = self.dev.ctrl_transfer(REQTYPE_HOST_TO_INTERFACE, 0xff, 0x37e1, port, x)
-        log.debug("set pins(%d) write %d bytes", port, data)
 
     def set_mhs(self, **kwargs):
         mhs = 0
@@ -91,61 +97,35 @@ class CP2105(CP210x):
             
         data = self.dev.ctrl_transfer(REQTYPE_HOST_TO_INTERFACE, 0x07, mhs, 0, None)
 
+    def get_mhs(self):
+        data = self.dev.ctrl_transfer(REQTYPE_INTERFACE_TO_HOST, 0x08, 0, 0, 1)
+        log.debug("mhs (mdmsts) = %s, %#x", data, data[0]) 
+
     def set_rts(self):
         data = self.dev.ctrl_transfer(REQTYPE_HOST_TO_INTERFACE, 0x07, 0x202, 0, None)
 
     def clear_rts(self):
         data = self.dev.ctrl_transfer(REQTYPE_HOST_TO_INTERFACE, 0x07, 0x200, 0, None)
 
-    def get_mhs(self):
-        data = self.dev.ctrl_transfer(REQTYPE_INTERFACE_TO_HOST, 0x08, 0, 0, 1)
-        log.debug("mhs (mdmsts) = %s, %#x", data, data[0]) 
-
         
 
 def kmain():
     dd = CP2105()
+    dd.get_device_mode()
     dd.get_pins(0)
     dd.get_pins(1)
-    """
-    for i in range(5):
+    for i in range(8):
         dd.set_pins(0, i)
         dd.set_pins(1, i)
-        time.sleep(0.5)
+        time.sleep(0.3)
     dd.get_pins(0)
     dd.get_pins(1)
-
-    print("turning off again")
-    time.sleep(0.5)
-
-    for i in range(5):
-        dd.clear_pins(0, i)
-        dd.clear_pins(1, i)
-        time.sleep(0.5)
-    dd.get_pins(0)
-    dd.get_pins(1)
-    """
-    dd.set_pins_raw(0, 3<<8 | 0xff)
-    print("should be off now!")
-    time.sleep(2.5)
-    
-    dd.set_pins_raw(0, 1)
-    time.sleep(0.5)
-    dd.set_pins_raw(0, 2)
-    time.sleep(0.5)
-    dd.set_pins_raw(0, 3)
-    time.sleep(0.5)
-    dd.set_pins_raw(0, 3<<8 | 0xff)
-    time.sleep(0.5)
-    dd.set_pins_raw(0, 2<<8 | 0xff)
-    time.sleep(0.5)
-    dd.set_pins_raw(0, 1<<8 | 0xff)
-    time.sleep(0.5)
-    dd.set_pins_raw(0, 0<<8 | 0xff)
-    time.sleep(0.5)
-
     dd.get_dual_port_config()
-    
+    # here goes nothing
+    #DualPortConfig(mode=4433, reset_latch=65278, suspend_latch=65278, sci=16, eci=16, device=48)
+    # rx/tx leds for SCI, and txled/rs485 for ECI
+    #dd.set_dual_port_config(4433, 65278, 65278, 0x13, 0x15, 48)
+    #dd.get_dual_port_config()
     
 
 if __name__ == "__main__":
